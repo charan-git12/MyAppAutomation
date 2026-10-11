@@ -1,8 +1,14 @@
-﻿name: MyApp Deployment CI
+﻿
+name: MyApp Deployment CI
 
+# Build triggers
 on:
   push:
+    branches:
+      - main
   pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -16,11 +22,22 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Initialize diagnostic logs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $logDir = Join-Path $env:RUNNER_TEMP 'Logs'
+          New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+
+          "CI started at $(Get-Date -Format o)" |
+            Set-Content (Join-Path $env:RUNNER_TEMP 'ci-status.log')
+
       - name: Install Pester
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force
+          Install-Module Pester -RequiredVersion 5.7.1 `
+            -Scope CurrentUser -Force
           Import-Module Pester -RequiredVersion 5.7.1 -ErrorAction Stop
 
       - name: Run Pester tests
@@ -28,71 +45,103 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module Pester -RequiredVersion 5.7.1
-          $result = Invoke-Pester -Path .\Deploy-App.Tests.ps1 -PassThru
-          if ($result.FailedCount -gt 0) {
-            throw "$($result.FailedCount) Pester test(s) failed."
-          }
-          Write-Host "Passed tests: $($result.PassedCount)"
 
-      - name: Run deployment and validate results
+          $result = Invoke-Pester `
+            -Path .\Deploy-App.Tests.ps1 -PassThru
+
+          "Pester passed: $($result.PassedCount)" |
+            Add-Content (Join-Path $env:RUNNER_TEMP 'ci-status.log')
+
+          "Pester failed: $($result.FailedCount)" |
+            Add-Content (Join-Path $env:RUNNER_TEMP 'ci-status.log')
+
+          if ($result.FailedCount -gt 0 -or
+              $result.PassedCount -eq 0) {
+            throw 'Pester validation failed.'
+          }
+
+      - name: Deploy and validate execution
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
 
-          $transcriptPath = Join-Path $env:RUNNER_TEMP 'ci-transcript.log'
-          $logPath = Join-Path $env:RUNNER_TEMP 'Logs\Deploy-App.log'
-          $destinationPath = Join-Path $env:RUNNER_TEMP 'MyAppInstalled'
+          $temp = $env:RUNNER_TEMP
+          $transcript = Join-Path $temp 'ci-transcript.log'
+          $errorLog = Join-Path $temp 'ci-errors.log'
+          $logPath = Join-Path $temp 'Logs\Deploy-App.log'
+          $destination = Join-Path $temp 'MyAppInstalled'
           $registryPath = 'HKCU:\Software\MyCompany\MyApp.CI'
-
-          Start-Transcript -Path $transcriptPath -Force
+          $transcriptStarted = $false
 
           try {
+            Start-Transcript -Path $transcript -Force
+            $transcriptStarted = $true
+
             . "$env:GITHUB_WORKSPACE\Deploy-App.ps1"
 
             Invoke-MyAppDeployment `
               -SourcePath "$env:GITHUB_WORKSPACE\Source" `
-              -DestinationPath $destinationPath `
+              -DestinationPath $destination `
               -RegistryPath $registryPath `
               -LogPath $logPath `
               -Version '1.0.0'
 
-            $installedFile = Join-Path $destinationPath 'app.txt'
+            # Validate installed file
+            $installedFile = Join-Path $destination 'app.txt'
             if (-not (Test-Path -LiteralPath $installedFile -PathType Leaf)) {
-              throw 'Validation failed: app.txt was not installed.'
+              throw 'Validation failed: app.txt is missing.'
             }
 
+            # Validate registry values
             $registry = Get-ItemProperty -LiteralPath $registryPath
-            if ($registry.InstallPath -ne $destinationPath) {
-              throw 'Validation failed: InstallPath registry value is incorrect.'
-            }
-            if ($registry.Version -ne '1.0.0') {
-              throw 'Validation failed: Version registry value is incorrect.'
+
+            if ($registry.InstallPath -ne $destination) {
+              throw 'Validation failed: InstallPath is incorrect.'
             }
 
+            if ($registry.Version -ne '1.0.0') {
+              throw 'Validation failed: Version is incorrect.'
+            }
+
+            # Validate deployment log
             $logContent = Get-Content -LiteralPath $logPath -Raw
             if ($logContent -notmatch 'Deployment completed successfully') {
-              throw 'Validation failed: success message is missing from the log.'
+              throw 'Validation failed: success message missing from log.'
             }
 
-            Write-Host 'Deployment and all validations succeeded.'
+            "Deployment status: SUCCESS at $(Get-Date -Format o)" |
+              Add-Content (Join-Path $temp 'ci-status.log')
+
+            Write-Host 'Deployment and validation succeeded.'
           }
           catch {
-            Write-Error $_
+            $details = ($_ | Out-String)
+            $details | Add-Content -Path $errorLog
+            $details | Write-Host
+
+            "Deployment status: FAILED at $(Get-Date -Format o)" |
+              Add-Content (Join-Path $temp 'ci-status.log')
+
             throw
           }
           finally {
-            Stop-Transcript
+            if ($transcriptStarted) {
+              Stop-Transcript
+            }
+
             if (Test-Path -LiteralPath $registryPath) {
               Remove-Item -LiteralPath $registryPath -Recurse -Force
             }
           }
 
-      - name: Upload deployment logs
+      - name: Upload diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: deployment-logs
+          name: deployment-diagnostics
           path: |
-            ${{ runner.temp }}\ci-transcript.log
-            ${{ runner.temp }}\Logs\Deploy-App.log
+            ${{ runner.temp }}/ci-transcript.log
+            ${{ runner.temp }}/ci-errors.log
+            ${{ runner.temp }}/ci-status.log
+            ${{ runner.temp }}/Logs/Deploy-App.log
           if-no-files-found: warn

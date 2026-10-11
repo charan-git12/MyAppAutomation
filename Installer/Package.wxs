@@ -1,0 +1,30 @@
+﻿<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="MyApp Installer Demo"
+    Manufacturer="MyCompany"
+    Version="1.0.0"
+    UpgradeCode="A72B6B5D-4E7C-4E88-9B23-81A40C66A102">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+    <MediaTemplate />
+
+    <StandardDirectory Id="ProgramFilesFolder">
+      <Directory Id="INSTALLFOLDER" Name="MyAppInstallerDemo">
+        <Component Id="AppComponent" Guid="*">
+          <File Id="AppFile" Source="..\Source\app.txt" KeyPath="yes" />
+          <RegistryValue
+            Root="HKLM"
+            Key="Software\MyCompany\MyAppInstallerDemo"
+            Name="InstallVersion"
+            Type="string"
+            Value="1.0.0"
+            KeyPath="no" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="MyApp Installer Demo" Level="1">
+      <ComponentRef Id="AppComponent" />
+    </Feature>
+  </Package>
+</Wix>

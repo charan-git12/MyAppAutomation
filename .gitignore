@@ -1,0 +1,19 @@
+﻿# Generated installer build files
+Installer/*.msi
+Installer/*.cab
+Installer/*.wixpdb
+
+# Installation and deployment logs
+Installer/*.log
+Logs/
+*.log
+
+# Installed application output
+InstalledApp/
+
+# Temporary files
+*.tmp
+*.bak
+
+# PowerShell editor files
+*.ps1~
